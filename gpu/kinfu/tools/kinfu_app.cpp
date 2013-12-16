@@ -57,14 +57,19 @@
 #include <pcl/io/pcd_io.h>
 #include <pcl/io/ply_io.h>
 #include <pcl/io/vtk_io.h>
-#include <pcl/io/openni_grabber.h>
-#include <pcl/io/oni_grabber.h>
-#include <pcl/io/pcd_grabber.h>
+#ifdef USE_OPENNI2
+    #include <pcl/io/openni2_grabber.h>
+#else
+    #include <pcl/io/openni_grabber.h>
+    #include <pcl/io/oni_grabber.h>
+    #include <pcl/io/pcd_grabber.h>
+    #include "openni_capture.h"
+    #include "evaluation.h"
+#endif
 #include <pcl/exceptions.h>
 
-#include "openni_capture.h"
+
 #include <pcl/visualization/point_cloud_color_handlers.h>
-#include "evaluation.h"
 
 #include <pcl/common/angles.h>
 
@@ -696,12 +701,14 @@ struct KinFuApp
     current_frame_cloud_view_->setViewerPose (kinfu_.getCameraPose ());
   }
 
+#ifndef USE_OPENNI2
   void
   initRegistration ()
   {        
     registration_ = capture_.providesCallback<pcl::ONIGrabber::sig_cb_openni_image_depth_image> ();
     cout << "Registration mode: " << (registration_ ? "On" : "Off (not supported by source)") << endl;
   }
+#endif
   
   void
   setDepthIntrinsics(std::vector<float> depth_intrinsics)
@@ -746,7 +753,8 @@ struct KinFuApp
     independent_camera_ = !independent_camera_;
     cout << "Camera mode: " << (independent_camera_ ?  "Independent" : "Bound to Kinect pose") << endl;
   }
-  
+
+#ifndef USE_OPENNI2
   void
   toggleEvaluationMode(const string& eval_folder, const string& match_file = string())
   {
@@ -758,7 +766,8 @@ struct KinFuApp
     image_view_.raycaster_ptr_ = RayCaster::Ptr( new RayCaster(kinfu_.rows (), kinfu_.cols (), 
         evaluation_ptr_->fx, evaluation_ptr_->fy, evaluation_ptr_->cx, evaluation_ptr_->cy) );
   }
-  
+#endif
+
   void execute(const PtrStepSz<const unsigned short>& depth, const PtrStepSz<const KinfuTracker::PixelRGB>& rgb24, bool has_data)
   {        
     bool has_image = false;
@@ -866,7 +875,7 @@ struct KinFuApp
     data_ready_cond_.notify_one();
   }
 
-
+#ifndef USE_OPENNI2
    void source_cb1_oni(const boost::shared_ptr<openni_wrapper::DepthImage>& depth_wrapper)  
   {        
     {
@@ -910,7 +919,7 @@ struct KinFuApp
     }
     data_ready_cond_.notify_one();
   }
-
+#endif
   /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   void
   startMainLoop (bool triggered_capture)
@@ -925,10 +934,14 @@ struct KinFuApp
     boost::function<void (const ImagePtr&, const DepthImagePtr&, float constant)> func1_oni = boost::bind (&KinFuApp::source_cb2_oni, this, _1, _2, _3);
     boost::function<void (const DepthImagePtr&)> func2_oni = boost::bind (&KinFuApp::source_cb1_oni, this, _1);
     
+#ifdef USE_OPENNI2
+    boost::function<void (const ImagePtr&, const DepthImagePtr&, float constant)> func1 = func1_dev;
+    boost::function<void (const DepthImagePtr&)> func2 = func2_dev;
+#else
     bool is_oni = dynamic_cast<pcl::ONIGrabber*>(&capture_) != 0;
     boost::function<void (const ImagePtr&, const DepthImagePtr&, float constant)> func1 = is_oni ? func1_oni : func1_dev;
     boost::function<void (const DepthImagePtr&)> func2 = is_oni ? func2_oni : func2_dev;
-
+#endif
     bool need_colors = integrate_colors_ || registration_;
     boost::signals2::connection c = need_colors ? capture_.registerCallback (func1) : capture_.registerCallback (func2);
 
@@ -1040,8 +1053,10 @@ struct KinFuApp
   pcl::TSDFVolume<float, short> tsdf_volume_;
   pcl::PointCloud<pcl::PointXYZI>::Ptr tsdf_cloud_ptr_;
 
+#ifndef USE_OPENNI2
   Evaluation::Ptr evaluation_ptr_;
-  
+#endif
+
   boost::mutex data_ready_mutex_;
   boost::condition_variable data_ready_cond_;
  
@@ -1144,16 +1159,22 @@ int
 print_cli_help ()
 {
   cout << "\nKinFu parameters:" << endl;
-  cout << "    --help, -h                              : print this message" << endl;  
+  cout << "    --help, -h                              : print this message" << endl;
+#ifndef USE_OPENNI2
   cout << "    --registration, -r                      : try to enable registration (source needs to support this)" << endl;
+#endif
   cout << "    --current-cloud, -cc                    : show current frame cloud" << endl;
   cout << "    --save-views, -sv                       : accumulate scene view and save in the end ( Requires OpenCV. Will cause 'bad_alloc' after some time )" << endl;  
   cout << "    --integrate-colors, -ic                 : enable color integration mode (allows to get cloud with colors)" << endl;   
   cout << "    --scale-truncation, -st                 : scale the truncation distance and raycaster based on the volume size" << endl;
   cout << "    -volume_size <size_in_meters>           : define integration volume size" << endl;
   cout << "    --depth-intrinsics <fx>,<fy>[,<cx>,<cy> : set the intrinsics of the depth camera" << endl;
-  cout << "Valid depth data sources:" << endl; 
+  cout << "Valid depth data sources:" << endl;
+#ifdef USE_OPENNI2
+  cout << "    -dev <device> (default)" << endl;
+#else
   cout << "    -dev <device> (default), -oni <oni_file>, -pcd <pcd_file or directory>" << endl;
+#endif
   cout << "";
   cout << " For RGBD benchmark (Requires OpenCV):" << endl; 
   cout << "    -eval <eval_folder> [-match_file <associations_file_in_the_folder>]" << endl;
@@ -1188,28 +1209,30 @@ main (int argc, char* argv[])
     {
       capture.reset (new pcl::OpenNIGrabber (openni_device));
     }
-    else if (pc::parse_argument (argc, argv, "-oni", oni_file) > 0)
-    {
-      triggered_capture = true;
-      bool repeat = false; // Only run ONI file once
-      capture.reset (new pcl::ONIGrabber (oni_file, repeat, ! triggered_capture));
-    }
-    else if (pc::parse_argument (argc, argv, "-pcd", pcd_dir) > 0)
-    {
-      float fps_pcd = 15.0f;
-      pc::parse_argument (argc, argv, "-pcd_fps", fps_pcd);
+    #ifndef USE_OPENNI2
+        else if (pc::parse_argument (argc, argv, "-oni", oni_file) > 0)
+        {
+          triggered_capture = true;
+          bool repeat = false; // Only run ONI file once
+          capture.reset (new pcl::ONIGrabber (oni_file, repeat, ! triggered_capture));
+        }
+        else if (pc::parse_argument (argc, argv, "-pcd", pcd_dir) > 0)
+        {
+          float fps_pcd = 15.0f;
+          pc::parse_argument (argc, argv, "-pcd_fps", fps_pcd);
 
-      vector<string> pcd_files = getPcdFilesInDir(pcd_dir);    
+          vector<string> pcd_files = getPcdFilesInDir(pcd_dir);    
 
-      // Sort the read files by name
-      sort (pcd_files.begin (), pcd_files.end ());
-      capture.reset (new pcl::PCDGrabber<pcl::PointXYZ> (pcd_files, fps_pcd, false));
-    }
-    else if (pc::parse_argument (argc, argv, "-eval", eval_folder) > 0)
-    {
-      //init data source latter
-      pc::parse_argument (argc, argv, "-match_file", match_file);
-    }
+          // Sort the read files by name
+          sort (pcd_files.begin (), pcd_files.end ());
+          capture.reset (new pcl::PCDGrabber<pcl::PointXYZ> (pcd_files, fps_pcd, false));
+        }
+        else if (pc::parse_argument (argc, argv, "-eval", eval_folder) > 0)
+        {
+          //init data source latter
+          pc::parse_argument (argc, argv, "-match_file", match_file);
+        }
+    #endif
     else
     {
       capture.reset( new pcl::OpenNIGrabber() );
@@ -1242,8 +1265,10 @@ main (int argc, char* argv[])
   if (pc::find_switch (argc, argv, "--save-views") || pc::find_switch (argc, argv, "-sv"))
     app.image_view_.accumulate_views_ = true;  //will cause bad alloc after some time  
   
-  if (pc::find_switch (argc, argv, "--registration") || pc::find_switch (argc, argv, "-r"))  
-    app.initRegistration();
+  #ifndef USE_OPENNI2
+      if (pc::find_switch (argc, argv, "--registration") || pc::find_switch (argc, argv, "-r"))  
+        app.initRegistration();
+  #endif
       
   if (pc::find_switch (argc, argv, "--integrate-colors") || pc::find_switch (argc, argv, "-ic"))
     app.toggleColorIntegration();
