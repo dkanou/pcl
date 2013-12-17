@@ -689,8 +689,10 @@ struct KinFuApp
 
   ~KinFuApp()
   {
+#ifndef USE_OPENNI2
     if (evaluation_ptr_)
       evaluation_ptr_->saveAllPoses(kinfu_);
+#endif
   }
 
   void
@@ -930,15 +932,16 @@ struct KinFuApp
         
     boost::function<void (const ImagePtr&, const DepthImagePtr&, float constant)> func1_dev = boost::bind (&KinFuApp::source_cb2_device, this, _1, _2, _3);
     boost::function<void (const DepthImagePtr&)> func2_dev = boost::bind (&KinFuApp::source_cb1_device, this, _1);
-
-    boost::function<void (const ImagePtr&, const DepthImagePtr&, float constant)> func1_oni = boost::bind (&KinFuApp::source_cb2_oni, this, _1, _2, _3);
-    boost::function<void (const DepthImagePtr&)> func2_oni = boost::bind (&KinFuApp::source_cb1_oni, this, _1);
     
 #ifdef USE_OPENNI2
     boost::function<void (const ImagePtr&, const DepthImagePtr&, float constant)> func1 = func1_dev;
     boost::function<void (const DepthImagePtr&)> func2 = func2_dev;
 #else
     bool is_oni = dynamic_cast<pcl::ONIGrabber*>(&capture_) != 0;
+    
+    boost::function<void (const ImagePtr&, const DepthImagePtr&, float constant)> func1_oni = boost::bind (&KinFuApp::source_cb2_oni, this, _1, _2, _3);
+    boost::function<void (const DepthImagePtr&)> func2_oni = boost::bind (&KinFuApp::source_cb1_oni, this, _1);
+    
     boost::function<void (const ImagePtr&, const DepthImagePtr&, float constant)> func1 = is_oni ? func1_oni : func1_dev;
     boost::function<void (const DepthImagePtr&)> func2 = is_oni ? func2_oni : func2_dev;
 #endif
@@ -1256,9 +1259,10 @@ main (int argc, char* argv[])
         
   KinFuApp app (*capture, volume_size, icp, visualization);
 
+#ifndef USE_OPENNI2
   if (pc::parse_argument (argc, argv, "-eval", eval_folder) > 0)
     app.toggleEvaluationMode(eval_folder, match_file);
-
+#endif
   if (pc::find_switch (argc, argv, "--current-cloud") || pc::find_switch (argc, argv, "-cc"))
     app.initCurrentFrameView ();
 
